@@ -393,7 +393,7 @@ class RundeckApi(object):
         project_filter = True if project else False
 
         if project_filter:
-            status, projects = project, True
+            status, projects = True, [project]
         else:
             status, projects = self.get_projects()
 
