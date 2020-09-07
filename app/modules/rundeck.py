@@ -26,6 +26,7 @@ class RundeckApi(object):
         self._check_ssl = ssl
         self._search_time = search_time
         self._del_time = del_time
+        self._pages = 0
 
     def __get(self, endpoint, parameters=''):
         '''GET requests in Rundeck API endpoints'''
@@ -70,6 +71,8 @@ class RundeckApi(object):
                 data = response
             else:
                 status = False
+                with open('error.html','w') as fp:
+                    fp.write(response.text)
                 data = 'Failing accessing API endpoint with http code: {0}'.format(
                     response.status_code)
         except exceptions.RequestException as exception:
@@ -81,7 +84,13 @@ class RundeckApi(object):
         '''Private function to delete both executions and workflows'''
         n_retries = 0
         interval = [page * self._chunk_size, page * self._chunk_size + len(executions)]
-        msg = '[{0}]: Deleting range {1} to {2}'.format(identifier, interval[0], interval[1])
+
+        msg = '[{0}]: Deleting range {1} to {2}, cycle {3} of {4}'.format(identifier,
+                                                                        interval[0],
+                                                                        interval[1],
+                                                                        page,
+                                                                        self._pages)
+
         self._log.write(msg)
 
         for _ in range(0, retries):
@@ -334,6 +343,7 @@ class RundeckApi(object):
                 msg = "[{0}]: There are {1} executions to delete.".format(project, total)
                 self._log.write(msg)
                 pages = get_num_pages(total, self._chunk_size)
+                self._pages = pages
                 msg = "Processing deleting in {0} cycles.".format(pages)
                 self._log.write(msg)
             else:
@@ -345,9 +355,9 @@ class RundeckApi(object):
 
                 if status:
                     success, msg = self.__delete_executions_data(project, executions, page, retries, backoff, unoptimized)
-
-                    if not success:
-                        return False, msg
+                    self._log.write(msg)
+                    # if not success:
+                    #     return False, msg
                 else:
                     msg = '[{0}]: Error getting executions.'.format(project)
                     return False, msg
@@ -364,9 +374,11 @@ class RundeckApi(object):
             return False, msg
         else:
             if total > 0:
+                self._total=total
                 msg = "[{0}]: There are {1} executions to delete.".format(job, total)
                 self._log.write(msg)
                 pages = get_num_pages(total, self._chunk_size)
+                self._pages = pages
                 msg = "Processing deleting in {0} cycles.".format(pages)
                 self._log.write(msg)
             else:
@@ -413,7 +425,7 @@ class RundeckApi(object):
 
                 if not status:
                     self._log.write(data, 4)
-                    return False
+                    return False, "non 200 response"
                 else:
                     msg = '[{0}] statistics: {1} old executions deleted.'.format(proj, int(data))
                     self._log.write(msg)

@@ -55,8 +55,7 @@ if __name__ == '__main__':
 
     # Start execution from available modes
     if CONF.execution_mode == 'cleanup':
-        STATUS, MSG = RDECK.clean_executions(CONF.filtered_project, CONF.executions_by_project,
-                                             CONF.retries, CONF.retry_delay, CONF.unoptimized)
+        STATUS, MSG = RDECK.clean_executions(CONF.filtered_project, CONF.executions_by_project, CONF.retries, CONF.retry_delay, CONF.unoptimized)
         HOUR, MIN, SEC = base.get_formatted_time(datetime.now() - START)
         LOG.write("Cleanup time: {0}h, {1}min and {2}sec".format(HOUR, MIN, SEC))
     elif CONF.execution_mode == 'listing':
