@@ -3,6 +3,7 @@
 from json import dumps
 from time import sleep
 from requests import get, post, exceptions
+from datetime import datetime, timedelta
 from .base import get_num_pages
 
 
@@ -27,6 +28,10 @@ class RundeckApi(object):
         self._search_time = search_time
         self._del_time = del_time
         self._pages = 0
+        self._successes=[]
+        self._fails=[]
+        self._statistics=[]
+        self._total=0
 
     def __get(self, endpoint, parameters=''):
         '''GET requests in Rundeck API endpoints'''
@@ -84,12 +89,24 @@ class RundeckApi(object):
         '''Private function to delete both executions and workflows'''
         n_retries = 0
         interval = [page * self._chunk_size, page * self._chunk_size + len(executions)]
-
-        msg = '[{0}]: Deleting range {1} to {2}, cycle {3} of {4}'.format(identifier,
+        try:
+            self._statistics.append(datetime.now())
+            datetimes=self._statistics[-3:]
+            timedeltas = [datetimes[i - 1] - datetimes[i] for i in range(1, len(datetimes))]
+            average_timedelta = sum(timedeltas, timedelta(0)) / len(timedeltas)
+            human_readable_delay = str(timedelta(seconds=abs(average_timedelta.total_seconds())))
+        except:
+            human_readable_delay = "None"
+            pass
+        msg = '[{0}]: Deleting range {1} to {2} / {3}, cycle {4} of {5} ({6:.2f}%), Average Time between cycle: {7} Fail rate: {8:.2f}%'.format(identifier,
                                                                         interval[0],
                                                                         interval[1],
+                                                                        self._total,
                                                                         page,
-                                                                        self._pages)
+                                                                        self._pages,
+                                                                        (page/self._pages*100),
+                                                                        human_readable_delay,
+                                                                        (len(self._fails) / ((len(self._successes) + len(self._fails)) or 1) *100))
 
         self._log.write(msg)
 
@@ -311,16 +328,22 @@ class RundeckApi(object):
         self._db.open()
 
         if workflow_ids and unoptimized:
+            msg="Deleting workflow_workflow_step from unoptimized rundeck DB"
+            self._log.write(msg)
             work_workflow_delete = 'DELETE FROM workflow_workflow_step WHERE workflow_commands_id IN ({0})'.format(
                 workflow_ids)
             self._db.query(work_workflow_delete)
 
         if workflow_step_ids:
+            msg="Deleting workflow_step_ids from rundeck DB"
+            self._log.write(msg)
             workflow_step_delete = 'DELETE FROM workflow_step WHERE id IN ({0})'.format(
                 workflow_step_ids)
             self._db.query(workflow_step_delete)
 
         if workflow_ids:
+            msg="Deleting workflows from rundeck DB"
+            self._log.write(msg)
             workflow_delete = 'DELETE FROM workflow WHERE id IN ({0})'.format(
                 workflow_ids)
             self._db.query(workflow_delete)
@@ -330,9 +353,24 @@ class RundeckApi(object):
 
         return True, ''
 
+
+    def retry_failures_in_smaller_batches(self, project, retries, backoff, unoptimized):
+        for page,executions in self._fails:
+            msg = '[{0}]: Retrying page #{1}, Executions: {2}'.format(project, page, executions)
+            self._log.write(msg)
+            for execution in executions:
+                success, msg = self.__delete_executions_data(project, [execution], page, retries, backoff, unoptimized)
+                if not success:
+                    msg = '[{0}]: page #{1}, Execution: {2}, Absolute Failure to cleanup!'.format(project, page, execution)
+                    self._log.write(msg)
+                else:
+                    msg = '[{0}]: page #{1}, Execution: {2}, GREAT SUCCESS!'.format(project, page, execution)
+                    self._log.write(msg)
+
     def clean_project_executions(self, project, retries=5, backoff=5, unoptimized=False):
         '''Clean executions older than a given time by from a project'''
         status, total = self.get_total_executions(project, False)
+
         pages = 0
 
         if not status:
@@ -341,6 +379,7 @@ class RundeckApi(object):
         else:
             if total > 0:
                 msg = "[{0}]: There are {1} executions to delete.".format(project, total)
+                self._total = total
                 self._log.write(msg)
                 pages = get_num_pages(total, self._chunk_size)
                 self._pages = pages
@@ -356,16 +395,32 @@ class RundeckApi(object):
                 if status:
                     success, msg = self.__delete_executions_data(project, executions, page, retries, backoff, unoptimized)
                     self._log.write(msg)
-                    # if not success:
+                    if not success:
+                        self._fails.append((page,executions))
+                    else:
+                        self._successes.append((page, executions))
                     #     return False, msg
                 else:
                     msg = '[{0}]: Error getting executions.'.format(project)
                     return False, msg
 
+            msg = '[{0}]: Completed all cycles, with {1:.2f}% success'.format(project, abs(100-(len(self._fails) / ((len(self._successes) + len(self._fails)) or 1))*100))
+            self._log.write(msg)
+            if self._fails:
+                msg = '[{0}]: Retrying Failures'.format(project)
+                self._log.write(msg)
+                self.retry_failures_in_smaller_batches(project, retries, backoff, unoptimized)
+
+
         return True, total
 
+
+
+
     def clean_job_executions(self, job, retries=5, backoff=5, unoptimized=False):
-        '''...'''
+        """
+        Cleanup all the executions of a specific job
+        """
         status, total = self.get_total_executions(job)
         pages = 0
 
